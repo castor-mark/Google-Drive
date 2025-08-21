@@ -22,12 +22,14 @@ const DownloadProgress = ({ progress }) => {
 
   const getStatusText = () => {
     switch (status) {
+      case 'processing':
+        return `Processing Google Drive files...`;
       case 'downloading':
-        return `Downloading from Google Drive...`;
+        return `Processing Google Drive files...`;
       case 'completed':
-        return `Downloaded successfully`;
+        return `Files processed successfully`;
       case 'error':
-        return `Download failed: ${error}`;
+        return `Processing failed: ${error}`;
       default:
         return 'Processing...';
     }
@@ -35,6 +37,7 @@ const DownloadProgress = ({ progress }) => {
 
   const getStatusColor = () => {
     switch (status) {
+      case 'processing':
       case 'downloading':
         return 'border-blue-200 bg-blue-50';
       case 'completed':

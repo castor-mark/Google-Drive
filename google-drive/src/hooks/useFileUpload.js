@@ -43,28 +43,37 @@ export const useFileUpload = () => {
     return null;
   }, []);
 
-  // Add files
+  // Add files (can be File objects or Google Drive metadata)
   const addFiles = useCallback((newFiles) => {
     setError(null);
     
     const filesArray = Array.from(newFiles);
-    const validationError = validateFiles(filesArray);
     
-    if (validationError) {
-      setError(validationError);
-      return false;
-    }
+    // Skip validation for Google Drive metadata (they're not File objects)
+    const isGoogleDriveMetadata = filesArray.length > 0 && filesArray[0].source === 'googledrive';
+    
+    if (!isGoogleDriveMetadata) {
+      const validationError = validateFiles(filesArray);
+      
+      if (validationError) {
+        setError(validationError);
+        return false;
+      }
 
-    // Check if adding ZIP with existing files
-    const hasZip = filesArray.some(file => 
-      file.type === 'application/zip' || file.name.toLowerCase().endsWith('.zip')
-    );
-    
-    if (hasZip) {
-      setFiles([filesArray.find(file => 
+      // Check if adding ZIP with existing files
+      const hasZip = filesArray.some(file => 
         file.type === 'application/zip' || file.name.toLowerCase().endsWith('.zip')
-      )]);
+      );
+      
+      if (hasZip) {
+        setFiles([filesArray.find(file => 
+          file.type === 'application/zip' || file.name.toLowerCase().endsWith('.zip')
+        )]);
+      } else {
+        setFiles(prev => [...prev, ...filesArray]);
+      }
     } else {
+      // For Google Drive metadata, just add them all
       setFiles(prev => [...prev, ...filesArray]);
     }
 

@@ -17,15 +17,29 @@ const AuthStatus = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const checkAuthStatus = () => {
-    const authenticated = googleDriveService.isAuthenticated();
-    const expiry = googleDriveService.getTokenExpiry();
-    
-    setIsAuthenticated(authenticated);
-    setTokenExpiry(expiry);
-    
-    if (expiry) {
-      updateTimeRemaining(expiry);
+  const checkAuthStatus = async () => {
+    try {
+      // Check server authentication status
+      const response = await fetch('/api/auth/status', {
+        credentials: 'include'
+      });
+      const data = await response.json();
+      
+      setIsAuthenticated(data.authenticated);
+      
+      if (data.tokenExpiry) {
+        const expiry = new Date(data.tokenExpiry);
+        setTokenExpiry(expiry);
+        updateTimeRemaining(expiry);
+      } else {
+        setTokenExpiry(null);
+        setTimeRemaining('');
+      }
+    } catch (error) {
+      console.error('Error checking auth status:', error);
+      setIsAuthenticated(false);
+      setTokenExpiry(null);
+      setTimeRemaining('');
     }
   };
 
@@ -51,8 +65,13 @@ const AuthStatus = () => {
 
   const handleSignOut = async () => {
     try {
-      await googleDriveService.signOut();
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include'
+      });
       checkAuthStatus();
+      // Redirect to login page
+      window.location.reload();
     } catch (error) {
       console.error('Error signing out:', error);
     }
@@ -61,11 +80,10 @@ const AuthStatus = () => {
   const handleReauth = async () => {
     try {
       setIsRetrying(true);
-      await googleDriveService.forceReauth();
-      checkAuthStatus();
+      // Redirect to Google OAuth for re-authentication
+      window.location.href = '/api/auth/google';
     } catch (error) {
       console.error('Error re-authenticating:', error);
-    } finally {
       setIsRetrying(false);
     }
   };
@@ -73,13 +91,10 @@ const AuthStatus = () => {
   const handleInitialize = async () => {
     try {
       setIsRetrying(true);
-      // Force re-initialization
-      googleDriveService.isInitialized = false;
-      await googleDriveService.initialize();
-      checkAuthStatus();
+      // Redirect to Google OAuth for authentication
+      window.location.href = '/api/auth/google';
     } catch (error) {
       console.error('Error initializing:', error);
-    } finally {
       setIsRetrying(false);
     }
   };

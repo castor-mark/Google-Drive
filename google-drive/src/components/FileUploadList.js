@@ -28,8 +28,8 @@ const FileUploadList = ({
         fileUrl = URL.createObjectURL(file);
         
         // Handle different file types
-        const fileType = file.type.toLowerCase();
-        const fileName = file.name.toLowerCase();
+        const fileType = (file.type || file.mimeType || '').toLowerCase();
+        const fileName = (file.name || '').toLowerCase();
         
         if (fileType.includes('pdf') || fileName.endsWith('.pdf')) {
           // Open PDFs directly in browser
@@ -70,8 +70,8 @@ const FileUploadList = ({
 
   // Check if file can be previewed (vs downloaded)
   const canPreview = (file) => {
-    const fileType = file.type.toLowerCase();
-    const fileName = file.name.toLowerCase();
+    const fileType = (file.type || file.mimeType || '').toLowerCase();
+    const fileName = (file.name || '').toLowerCase();
     
     return fileType.includes('pdf') ||
            fileType.includes('image') ||

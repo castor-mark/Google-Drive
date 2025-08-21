@@ -1,97 +1,22 @@
 class GoogleDriveService {
   constructor() {
-    this.CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID;
     this.API_KEY = process.env.REACT_APP_GOOGLE_API_KEY;
     this.DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest';
-    this.SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
     this.isInitialized = false;
     this.accessToken = null;
     this.tokenExpiry = null;
     
-    // Storage keys
-    this.STORAGE_KEY = 'google_drive_token';
-    this.EXPIRY_KEY = 'google_drive_token_expiry';
-    
-    // Load token from storage on initialization
-    this.loadTokenFromStorage();
-    
     // Validate environment variables
-    if (!this.CLIENT_ID || !this.API_KEY) {
-      console.error('Missing Google Drive API credentials in environment variables');
-      throw new Error('Google Drive API credentials not configured');
+    if (!this.API_KEY) {
+      console.error('Missing Google Drive API key in environment variables');
+      throw new Error('Google Drive API key not configured');
     }
   }
 
-  // Load token from localStorage
-  loadTokenFromStorage() {
-    try {
-      const storedToken = localStorage.getItem(this.STORAGE_KEY);
-      const storedExpiry = localStorage.getItem(this.EXPIRY_KEY);
-      
-      if (storedToken && storedExpiry) {
-        const expiryTime = new Date(storedExpiry);
-        const now = new Date();
-        
-        // Check if token is still valid (with 5 minute buffer)
-        if (expiryTime > new Date(now.getTime() + 5 * 60 * 1000)) {
-          this.accessToken = storedToken;
-          this.tokenExpiry = expiryTime;
-          console.log('Loaded valid token from storage, expires at:', expiryTime);
-          return true;
-        } else {
-          console.log('Stored token has expired, clearing storage');
-          this.clearStoredToken();
-        }
-      }
-    } catch (error) {
-      console.error('Error loading token from storage:', error);
-      this.clearStoredToken();
-    }
-    return false;
-  }
 
-  // Save token to localStorage
-  saveTokenToStorage(token, expiresIn) {
-    try {
-      // Calculate expiry time (expiresIn is in seconds)
-      const expiryTime = new Date(Date.now() + (expiresIn * 1000));
-      
-      localStorage.setItem(this.STORAGE_KEY, token);
-      localStorage.setItem(this.EXPIRY_KEY, expiryTime.toISOString());
-      
-      this.accessToken = token;
-      this.tokenExpiry = expiryTime;
-      
-      console.log('Token saved to storage, expires at:', expiryTime);
-    } catch (error) {
-      console.error('Error saving token to storage:', error);
-    }
-  }
-
-  // Clear stored token
-  clearStoredToken() {
-    try {
-      localStorage.removeItem(this.STORAGE_KEY);
-      localStorage.removeItem(this.EXPIRY_KEY);
-      this.accessToken = null;
-      this.tokenExpiry = null;
-      console.log('Cleared stored token');
-    } catch (error) {
-      console.error('Error clearing stored token:', error);
-    }
-  }
-
-  // Check if token is valid and not expired
+  // Check if we have a current token (server session based)
   isTokenValid() {
-    if (!this.accessToken || !this.tokenExpiry) {
-      return false;
-    }
-    
-    // Check if token expires in the next 5 minutes
-    const now = new Date();
-    const bufferTime = new Date(now.getTime() + 5 * 60 * 1000);
-    
-    return this.tokenExpiry > bufferTime;
+    return this.accessToken !== null;
   }
 
   // Load Google Identity Services
@@ -241,65 +166,58 @@ class GoogleDriveService {
     }
   }
 
-  // Authenticate using Google Identity Services
+  // Get authentication from server session (SSO-based)
   async authenticate(forceNew = false) {
     try {
+      console.log('Getting authentication from server session...');
       await this.initialize();
 
-      // If we have a valid token and not forcing new auth, use it
-      if (!forceNew && this.isTokenValid()) {
-        console.log('Using existing valid token');
-        window.gapi.client.setToken({
-          access_token: this.accessToken
-        });
-        return { access_token: this.accessToken };
-      }
-
-      // Clear any existing invalid token
-      if (!this.isTokenValid()) {
-        this.clearStoredToken();
-      }
-
-      return new Promise((resolve, reject) => {
-        console.log('Starting new authentication...');
-
-        const client = window.google.accounts.oauth2.initTokenClient({
-          client_id: this.CLIENT_ID,
-          scope: this.SCOPES,
-          callback: (response) => {
-            if (response.error) {
-              console.error('Authentication error:', response.error);
-              reject(new Error(`Authentication failed: ${response.error}`));
-              return;
-            }
-
-            console.log('Authentication successful!');
-            
-            // Save token to storage (expires_in is in seconds)
-            const expiresIn = response.expires_in || 3600; // Default to 1 hour
-            this.saveTokenToStorage(response.access_token, expiresIn);
-            
-            // Set the token for gapi client
-            window.gapi.client.setToken({
-              access_token: this.accessToken
-            });
-
-            resolve(response);
-          },
-          error_callback: (error) => {
-            console.error('OAuth error:', error);
-            reject(new Error(`OAuth error: ${error.type}`));
-          }
-        });
-
-        client.requestAccessToken();
+      // Check if user has a valid server session with Google Drive access
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/auth/session`, {
+        credentials: 'include'
       });
 
+      if (response.ok) {
+        const sessionData = await response.json();
+        if (sessionData.authenticated) {
+          console.log('User has valid session, getting Drive token from server...');
+          
+          // Get a temporary token for Google Drive picker from the server
+          const tokenResponse = await fetch(`${process.env.REACT_APP_API_URL}/api/auth/drive-token`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+
+          if (tokenResponse.ok) {
+            const tokenData = await tokenResponse.json();
+            if (tokenData.success) {
+              // Use the server-provided token for the picker
+              this.accessToken = tokenData.accessToken;
+              this.tokenExpiry = new Date(Date.now() + (3600 * 1000)); // 1 hour default
+              
+              window.gapi.client.setToken({
+                access_token: this.accessToken
+              });
+
+              console.log('Successfully got Drive token from server session');
+              return { access_token: this.accessToken };
+            }
+          }
+        }
+      }
+
+      // If no valid session, user needs to login to the system first
+      throw new Error('Please log in to the system first to access Google Drive');
+
     } catch (error) {
-      console.error('Authentication initialization error:', error);
+      console.error('Authentication error:', error);
       throw error;
     }
   }
+
 
   // Open Google Drive Picker
   async openFilePicker(onProgress = null) {
@@ -311,7 +229,7 @@ class GoogleDriveService {
 
       // Ensure we have a valid token
       if (!this.isTokenValid()) {
-        console.log('No valid token, authenticating...');
+        console.log('No valid token, getting from server session...');
         await this.authenticate();
       }
 
@@ -383,7 +301,8 @@ class GoogleDriveService {
             
             console.log('Picker creation failed, attempting full re-initialization...');
             this.isInitialized = false;
-            this.clearStoredToken();
+            this.accessToken = null;
+            this.tokenExpiry = null;
             
             // Try full re-initialization and authentication
             this.initialize()
@@ -409,15 +328,15 @@ class GoogleDriveService {
     }
   }
 
-  // Process selected files and download them
+  // Process selected files and prepare metadata for server-side download
   async processSelectedFiles(docs, resolve, reject, onProgress = null) {
     try {
-      const files = [];
+      const fileMetadata = [];
       const totalFiles = docs.length;
 
       for (let index = 0; index < docs.length; index++) {
         const doc = docs[index];
-        console.log('Processing file:', doc.name);
+        console.log('Processing file metadata:', doc.name);
 
         try {
           // Notify progress callback if provided
@@ -426,23 +345,23 @@ class GoogleDriveService {
               current: index + 1,
               total: totalFiles,
               fileName: doc.name,
-              status: 'downloading'
+              status: 'processing'
             });
           }
 
-          const fileBlob = await this.downloadFile(doc.id);
-          
-          const file = new File([fileBlob], doc.name, {
-            type: doc.mimeType,
+          // Create metadata object for server-side processing
+          const metadata = {
+            id: doc.id,
+            name: doc.name,
+            mimeType: doc.mimeType,
+            size: doc.sizeBytes,
+            url: doc.url,
+            source: 'googledrive',
             lastModified: new Date().getTime()
-          });
+          };
 
-          file.driveId = doc.id;
-          file.driveUrl = doc.url;
-          file.source = 'googledrive';
-
-          files.push(file);
-          console.log('File processed successfully:', doc.name);
+          fileMetadata.push(metadata);
+          console.log('File metadata processed:', doc.name);
 
           // Notify completion of this file
           if (onProgress) {
@@ -467,16 +386,10 @@ class GoogleDriveService {
               error: error.message
             });
           }
-          
-          // If it's an auth error, clear token and let user know
-          if (error.message.includes('401') || error.message.includes('auth')) {
-            this.clearStoredToken();
-            throw new Error('Authentication expired. Please try again.');
-          }
         }
       }
 
-      resolve(files);
+      resolve(fileMetadata);
 
     } catch (error) {
       console.error('Error processing selected files:', error);
@@ -535,16 +448,14 @@ class GoogleDriveService {
     }
   }
 
-  // Sign out and clear stored token
+  // Clear token (sign out handled by auth context)
   async signOut() {
     try {
-      if (this.accessToken && window.google && window.google.accounts) {
-        window.google.accounts.oauth2.revoke(this.accessToken);
-      }
-      this.clearStoredToken();
-      console.log('Signed out successfully');
+      this.accessToken = null;
+      this.tokenExpiry = null;
+      console.log('Drive service token cleared');
     } catch (error) {
-      console.error('Error signing out:', error);
+      console.error('Error clearing Drive token:', error);
     }
   }
 
@@ -555,13 +466,9 @@ class GoogleDriveService {
 
   // Force re-authentication (useful for testing or when user explicitly wants to re-auth)
   async forceReauth() {
-    this.clearStoredToken();
+    this.accessToken = null;
+    this.tokenExpiry = null;
     return await this.authenticate(true);
-  }
-
-  // Get token expiry time for UI display
-  getTokenExpiry() {
-    return this.tokenExpiry;
   }
 }
 

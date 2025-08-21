@@ -3,6 +3,11 @@ const router = express.Router();
 const File = require('../models/File');
 const { upload, handleMulterError, validateUpload } = require('../middleware/upload');
 
+// Google Drive services
+const jobQueue = require('../services/JobQueue');
+const googleDriveProcessor = require('../services/GoogleDriveProcessor');
+const gridFSService = require('../services/GridFSService');
+
 // POST /api/upload - Handle file uploads
 router.post('/', 
   upload.array('files'), // Allow unlimited files with field name 'files'
@@ -90,5 +95,192 @@ router.post('/',
   }
 );
 
+
+// POST /api/upload/google-drive - Handle Google Drive files
+router.post('/google-drive', async (req, res) => {
+  try {
+    // Check if user is authenticated with Google Drive access
+    if (!req.session.authenticated || !req.session.googleTokens) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required. Please log in to access Google Drive.'
+      });
+    }
+
+    const { googleDriveFiles, description, category, uploadedBy } = req.body;
+    
+    console.log('Received Google Drive upload request from user:', req.session.user.email);
+    console.log('Files count:', googleDriveFiles ? googleDriveFiles.length : 0);
+    console.log('First file sample:', googleDriveFiles ? googleDriveFiles[0] : 'none');
+    
+    // Validation
+    if (!googleDriveFiles || !Array.isArray(googleDriveFiles) || googleDriveFiles.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No Google Drive files provided'
+      });
+    }
+
+    // Validate file metadata (no longer need accessToken since we use session)
+    for (const file of googleDriveFiles) {
+      if (!file.id || !file.name) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid file metadata: id and name are required'
+        });
+      }
+    }
+
+    // Create job for background processing
+    const jobId = jobQueue.createJob({
+      type: 'google_drive_download',
+      googleDriveFiles,
+      description: description || '',
+      category: category || 'googledrive',
+      uploadedBy: req.session.user.email || uploadedBy || 'anonymous'
+    });
+
+    // Start processing in background with user session
+    googleDriveProcessor.processJobAsync(jobId, req.session);
+
+    res.status(202).json({
+      success: true,
+      message: 'Google Drive processing started',
+      jobId,
+      totalFiles: googleDriveFiles.length,
+      status: 'processing'
+    });
+
+  } catch (error) {
+    console.error('Google Drive upload error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to start Google Drive processing',
+      details: error.message
+    });
+  }
+});
+
+// GET /api/upload/progress/:jobId - Get job progress
+router.get('/progress/:jobId', (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const progress = jobQueue.getJobProgress(jobId);
+    
+    if (!progress) {
+      return res.status(404).json({
+        success: false,
+        error: 'Job not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      ...progress
+    });
+
+  } catch (error) {
+    console.error('Progress check error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get job progress',
+      details: error.message
+    });
+  }
+});
+
+// GET /api/upload/jobs - List all jobs (admin endpoint)
+router.get('/jobs', (req, res) => {
+  try {
+    const { status, limit = 20, offset = 0 } = req.query;
+    
+    const result = jobQueue.listJobs({
+      status,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+
+    res.json({
+      success: true,
+      ...result
+    });
+
+  } catch (error) {
+    console.error('Jobs list error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get jobs list',
+      details: error.message
+    });
+  }
+});
+
+// GET /api/upload/stats - Get processing statistics
+router.get('/stats', (req, res) => {
+  try {
+    const stats = googleDriveProcessor.getStats();
+    
+    res.json({
+      success: true,
+      ...stats
+    });
+
+  } catch (error) {
+    console.error('Stats error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get statistics',
+      details: error.message
+    });
+  }
+});
+
+// GET /api/upload/download/:fileId - Download file from GridFS
+router.get('/download/:fileId', async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    
+    // Get file info from database
+    const file = await File.findById(fileId);
+    if (!file) {
+      return res.status(404).json({
+        success: false,
+        error: 'File not found'
+      });
+    }
+
+    if (file.uploadSource === 'local') {
+      // Redirect to static file
+      return res.redirect(file.url);
+    }
+
+    if (!file.gridfsId) {
+      return res.status(404).json({
+        success: false,
+        error: 'File not available for download'
+      });
+    }
+
+    // Get file from GridFS
+    const downloadStream = await gridFSService.downloadFile(file.gridfsId);
+    
+    // Set response headers
+    res.set({
+      'Content-Type': file.mimetype,
+      'Content-Disposition': `attachment; filename="${file.originalName}"`
+    });
+
+    // Stream file to response
+    downloadStream.pipe(res);
+
+  } catch (error) {
+    console.error('Download error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to download file',
+      details: error.message
+    });
+  }
+});
 
 module.exports = router;

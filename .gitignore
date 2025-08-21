@@ -5,6 +5,8 @@
 /.pnp
 .pnp.js
 
+/server/temp
+
 
 /google-drive/.env
 # testing

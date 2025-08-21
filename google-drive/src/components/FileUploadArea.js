@@ -35,7 +35,7 @@ const FileUploadArea = () => {
     }
   };
 
-  // Updated handleUpload function to call your backend
+  // Updated handleUpload function for server-side processing
   const handleUpload = async () => {
     if (files.length === 0) return;
 
@@ -43,86 +43,171 @@ const FileUploadArea = () => {
     setError(null);
     
     try {
-      const formData = new FormData();
-      
-      // Add files to FormData
-      files.forEach(file => {
-        formData.append('files', file);
-      });
-      
-      // Add metadata
-      formData.append('description', 'Uploaded from React frontend');
-      formData.append('category', 'user_upload');
-      formData.append('uploadedBy', 'frontend_user');
+      // Separate local files from Google Drive metadata
+      const localFiles = files.filter(file => file instanceof File && file.source !== 'googledrive');
+      const googleDriveFiles = files.filter(file => file.source === 'googledrive');
 
-      // Create XMLHttpRequest for progress tracking
-      const xhr = new XMLHttpRequest();
-      
-      // Track upload progress
-      xhr.upload.addEventListener('progress', (event) => {
-        if (event.lengthComputable) {
-          const progress = Math.round((event.loaded / event.total) * 100);
-          
-          // Update progress for all files
-          const newProgress = {};
-          files.forEach(file => {
-            newProgress[file.name] = progress;
-          });
-          setUploadProgress(newProgress);
+      let result;
+
+      if (googleDriveFiles.length > 0) {
+        // Handle Google Drive files - send metadata to server
+        const requestData = {
+          googleDriveFiles: googleDriveFiles,
+          localFiles: [], // We'll handle mixed uploads separately if needed
+          description: 'Uploaded from React frontend',
+          category: 'user_upload',
+          uploadedBy: 'frontend_user'
+        };
+
+        const response = await fetch(`${process.env.REACT_APP_API_URL}/api/upload/google-drive`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include', // Include session cookies
+          body: JSON.stringify(requestData)
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Server-side upload failed');
         }
-      });
-      
-      // Handle completion
-      xhr.addEventListener('load', () => {
-        if (xhr.status === 200) {
-          try {
-            const result = JSON.parse(xhr.responseText);
-            
-            // Set success message
-            setSuccessMessage(`Successfully uploaded ${result.files.length} file(s) to MongoDB!`);
-            
-            // Show completion animation briefly, then clear
-            setTimeout(() => {
+
+        result = await response.json();
+        
+        // Start polling for progress
+        if (result.jobId) {
+          await pollUploadProgress(result.jobId);
+          return;
+        }
+        
+      } else {
+        // Handle local files - traditional FormData upload
+        const formData = new FormData();
+        
+        localFiles.forEach(file => {
+          formData.append('files', file);
+        });
+        
+        formData.append('description', 'Uploaded from React frontend');
+        formData.append('category', 'user_upload');
+        formData.append('uploadedBy', 'frontend_user');
+
+        // Use XMLHttpRequest for progress tracking on local files
+        const xhr = new XMLHttpRequest();
+        
+        xhr.upload.addEventListener('progress', (event) => {
+          if (event.lengthComputable) {
+            const progress = Math.round((event.loaded / event.total) * 100);
+            const newProgress = {};
+            localFiles.forEach(file => {
+              newProgress[file.name] = progress;
+            });
+            setUploadProgress(newProgress);
+          }
+        });
+        
+        return new Promise((resolve, reject) => {
+          xhr.addEventListener('load', () => {
+            if (xhr.status === 200) {
+              try {
+                const result = JSON.parse(xhr.responseText);
+                setSuccessMessage(`Successfully uploaded ${result.files.length} file(s)!`);
+                
+                setTimeout(() => {
+                  setIsUploading(false);
+                  clearFiles();
+                  setTimeout(() => setSuccessMessage(null), 3000);
+                }, 1000);
+                
+                resolve(result);
+              } catch (error) {
+                setError('Invalid response from server');
+                setIsUploading(false);
+                reject(error);
+              }
+            } else {
+              try {
+                const errorData = JSON.parse(xhr.responseText);
+                setError(errorData.error || 'Upload failed');
+              } catch {
+                setError('Upload failed with status: ' + xhr.status);
+              }
               setIsUploading(false);
-              clearFiles();
-              console.log('✅ Upload successful:', result);
-              
-              // Clear success message after 3 seconds
-              setTimeout(() => {
-                setSuccessMessage(null);
-              }, 3000);
-            }, 1000); // Show "Complete" status for 1 second
-            
-          } catch (error) {
-            setError('Invalid response from server');
+              reject(new Error('Upload failed'));
+            }
+          });
+          
+          xhr.addEventListener('error', () => {
+            setError(`Could not connect to server. Make sure the backend is running on ${process.env.REACT_APP_API_URL}`);
             setIsUploading(false);
-          }
-        } else {
-          try {
-            const errorData = JSON.parse(xhr.responseText);
-            setError(errorData.error || 'Upload failed');
-          } catch {
-            setError('Upload failed with status: ' + xhr.status);
-          }
-          setIsUploading(false);
-        }
-      });
-      
-      // Handle errors
-      xhr.addEventListener('error', () => {
-        setError(`Could not connect to server. Make sure the backend is running on ${process.env.REACT_APP_API_URL}`);
-        setIsUploading(false);
-      });
-      
-      // Send request to your Node.js backend
-      xhr.open('POST', `${process.env.REACT_APP_API_URL}/api/upload`);
-      xhr.send(formData);
+            reject(new Error('Connection failed'));
+          });
+          
+          xhr.open('POST', `${process.env.REACT_APP_API_URL}/api/upload`);
+          xhr.send(formData);
+        });
+      }
       
     } catch (error) {
       console.error('Upload error:', error);
       setError(error.message || 'Upload failed. Please try again.');
       setIsUploading(false);
     }
+  };
+
+  // Poll server for upload progress
+  const pollUploadProgress = async (jobId) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`${process.env.REACT_APP_API_URL}/api/upload/progress/${jobId}`);
+        
+        if (!response.ok) {
+          throw new Error('Failed to get progress');
+        }
+        
+        const progressData = await response.json();
+        
+        // Update progress
+        const newProgress = {};
+        if (progressData.currentFile) {
+          newProgress[progressData.currentFile] = Math.round((progressData.completed / progressData.total) * 100);
+        }
+        setUploadProgress(newProgress);
+        
+        // Check if completed
+        if (progressData.status === 'completed') {
+          clearInterval(pollInterval);
+          setSuccessMessage(`Successfully processed ${progressData.total} file(s) from Google Drive!`);
+          
+          setTimeout(() => {
+            setIsUploading(false);
+            clearFiles();
+            setTimeout(() => setSuccessMessage(null), 3000);
+          }, 1000);
+          
+        } else if (progressData.status === 'failed') {
+          clearInterval(pollInterval);
+          setError(progressData.error || 'Server-side processing failed');
+          setIsUploading(false);
+        }
+        
+      } catch (error) {
+        console.error('Progress polling error:', error);
+        clearInterval(pollInterval);
+        setError('Failed to track upload progress');
+        setIsUploading(false);
+      }
+    }, 2000); // Poll every 2 seconds
+    
+    // Stop polling after 30 minutes (for very large uploads)
+    setTimeout(() => {
+      clearInterval(pollInterval);
+      if (isUploading) {
+        setError('Upload timeout - processing may still continue on server');
+        setIsUploading(false);
+      }
+    }, 30 * 60 * 1000);
   };
 
   return (

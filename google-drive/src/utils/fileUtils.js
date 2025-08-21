@@ -11,21 +11,22 @@ export const formatFileSize = (bytes) => {
 
 // Get file type icon
 export const getFileTypeIcon = (fileName, mimeType) => {
-  const extension = fileName.split('.').pop()?.toLowerCase();
+  const extension = (fileName || '').split('.').pop()?.toLowerCase();
+  const mime = mimeType || '';
   
-  if (mimeType?.includes('pdf') || extension === 'pdf') {
+  if (mime.includes('pdf') || extension === 'pdf') {
     return '📄';
   }
-  if (mimeType?.includes('word') || extension === 'docx' || extension === 'doc') {
+  if (mime.includes('word') || extension === 'docx' || extension === 'doc') {
     return '📝';
   }
-  if (mimeType?.includes('zip') || extension === 'zip') {
+  if (mime.includes('zip') || extension === 'zip') {
     return '🗂️';
   }
-  if (mimeType?.includes('image') || ['jpg', 'jpeg', 'png', 'gif'].includes(extension)) {
+  if (mime.includes('image') || ['jpg', 'jpeg', 'png', 'gif'].includes(extension)) {
     return '🖼️';
   }
-  if (mimeType?.includes('text') || extension === 'txt') {
+  if (mime.includes('text') || extension === 'txt') {
     return '📋';
   }
   
@@ -34,21 +35,22 @@ export const getFileTypeIcon = (fileName, mimeType) => {
 
 // Get file type color for UI
 export const getFileTypeColor = (fileName, mimeType) => {
-  const extension = fileName.split('.').pop()?.toLowerCase();
+  const extension = (fileName || '').split('.').pop()?.toLowerCase();
+  const mime = mimeType || '';
   
-  if (mimeType?.includes('pdf') || extension === 'pdf') {
+  if (mime.includes('pdf') || extension === 'pdf') {
     return 'text-red-600 bg-red-50';
   }
-  if (mimeType?.includes('word') || extension === 'docx' || extension === 'doc') {
+  if (mime.includes('word') || extension === 'docx' || extension === 'doc') {
     return 'text-blue-600 bg-blue-50';
   }
-  if (mimeType?.includes('zip') || extension === 'zip') {
+  if (mime.includes('zip') || extension === 'zip') {
     return 'text-yellow-600 bg-yellow-50';
   }
-  if (mimeType?.includes('image') || ['jpg', 'jpeg', 'png', 'gif'].includes(extension)) {
+  if (mime.includes('image') || ['jpg', 'jpeg', 'png', 'gif'].includes(extension)) {
     return 'text-green-600 bg-green-50';
   }
-  if (mimeType?.includes('text') || extension === 'txt') {
+  if (mime.includes('text') || extension === 'txt') {
     return 'text-gray-600 bg-gray-50';
   }
   
@@ -67,9 +69,10 @@ export const isValidFileType = (file) => {
   ];
 
   const allowedExtensions = ['pdf', 'docx', 'zip', 'txt', 'jpg', 'jpeg', 'png'];
-  const extension = file.name.split('.').pop()?.toLowerCase();
+  const extension = (file.name || '').split('.').pop()?.toLowerCase();
+  const fileType = file.type || file.mimeType || '';
 
-  return allowedTypes.includes(file.type) || allowedExtensions.includes(extension);
+  return allowedTypes.includes(fileType) || allowedExtensions.includes(extension);
 };
 
 // Get file source icon
@@ -82,7 +85,8 @@ export const getFileSourceIcon = (file) => {
 
 // Create a preview URL for images
 export const createPreviewUrl = (file) => {
-  if (file.type.startsWith('image/')) {
+  const fileType = file.type || file.mimeType || '';
+  if (fileType.startsWith('image/')) {
     return URL.createObjectURL(file);
   }
   return null;
